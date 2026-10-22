@@ -14,6 +14,8 @@ from cs336_basics.tokenizer import Tokenizer
 from cs336_basics.model import Linear
 from cs336_basics.model import Embedding
 from cs336_basics.model import RMSNorm
+from cs336_basics.model import SwiGLU
+from cs336_basics.model import RoPE
 
 def run_linear(
     d_in: int,
@@ -102,7 +104,9 @@ def run_swiglu(
     # swiglu.w1.weight.data = w1_weight
     # swiglu.w2.weight.data = w2_weight
     # swiglu.w3.weight.data = w3_weight
-    raise NotImplementedError
+    module = SwiGLU(d_model=d_model,d_ff=d_ff,device=w1_weight.device, dtype=w1_weight.dtype)
+    module.load_state_dict({"w1.weight": w1_weight, "w2.weight": w2_weight, "w3.weight": w3_weight})
+    return module(in_features)
 
 
 def run_scaled_dot_product_attention(
@@ -219,7 +223,14 @@ def run_rope(
     Returns:
         Float[Tensor, " ... sequence_length d_k"]: Tensor with RoPEd input.
     """
-    raise NotImplementedError
+    module = RoPE(
+        theta=theta,
+        d_k=d_k,
+        max_seq_len=max_seq_len,
+        device=in_query_or_key.device,
+    )
+
+    return module(in_query_or_key, token_positions)
 
 
 def run_transformer_block(
