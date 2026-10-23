@@ -226,3 +226,44 @@ class MultiHeadSelfAttention(nn.Module):
 
         return self.o_proj(attention_output)
 
+class TransformerBlock(nn.Module):
+    def __init__(
+        self,
+        d_model,
+        num_heads,
+        d_ff,
+        max_seq_len,
+        theta,
+        device=None,
+        dtype=None
+    ):
+        super().__init__()
+        
+        factory_kwargs = {
+            "device": device,
+            "dtype": dtype
+        }
+
+        self.ln1 = RMSNorm(d_model=d_model,**factory_kwargs)
+
+        self.attn = MultiHeadSelfAttention(
+            d_model=d_model,
+            num_heads=num_heads,
+            theta=theta,
+            max_seq_len=max_seq_len,
+            **factory_kwargs,
+        )
+
+        self.ln2 = RMSNorm(d_model=d_model, ** factory_kwargs)
+
+        self.ffn = SwiGLU(
+            d_model=d_model,
+            d_ff=d_ff,
+            **factory_kwargs
+        )
+
+    def forward(self, x, token_positions: Tensor | None = None) -> Tensor:
+        x = x + self.attn(self.ln1(x), token_positions)
+        x = x + self.ffn(self.ln2(x))
+
+        return x
