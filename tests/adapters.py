@@ -20,7 +20,8 @@ from cs336_basics.model import softmax
 from cs336_basics.model import scaled_dot_product_attention
 from cs336_basics.model import MultiHeadSelfAttention
 from cs336_basics.model import TransformerBlock
-
+from cs336_basics.model import TransformerLM
+from cs336_basics.model import cross_entropy
 
 def run_linear(
     d_in: int,
@@ -444,7 +445,31 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+    reference_weight = weights["token_embeddings.weight"]
+    module = TransformerLM(
+        vocab_size=vocab_size,
+        context_length=context_length,
+        d_model=d_model,
+        num_layers=num_layers,
+        num_heads=num_heads,
+        d_ff=d_ff,
+        theta=rope_theta,
+        device=reference_weight.device,
+        dtype=reference_weight.dtype,
+    )
+
+    adapted_weights = {
+        key.replace(
+            ".attn.output_proj.weight",
+            ".attn.o_proj.weight",
+        ): value
+        for key, value in weights.items()
+    }
+
+
+    module.load_state_dict(adapted_weights)
+
+    return module(in_indices)
 
 
 def run_rmsnorm(
@@ -545,7 +570,7 @@ def run_cross_entropy(
     Returns:
         Float[Tensor, ""]: The average cross-entropy loss across examples.
     """
-    raise NotImplementedError
+    return cross_entropy(inputs, targets)
 
 
 def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float) -> None:

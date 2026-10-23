@@ -267,3 +267,96 @@ class TransformerBlock(nn.Module):
         x = x + self.ffn(self.ln2(x))
 
         return x
+
+
+class TransformerLM(nn.Module):
+    def __init__(
+        self,
+        vocab_size,
+        context_length,
+        num_layers,
+        d_model,
+        num_heads,
+        d_ff,
+        theta,
+        device=None,
+        dtype=None
+    ):
+        super().__init__()
+        factory_kwargs = {"device": device, "dtype": dtype}
+        self.token_embeddings = Embedding(
+            num_embeddings=vocab_size,
+            embedding_dim=d_model,
+            **factory_kwargs
+        )
+
+        self.layers = nn.ModuleList(
+            [
+                TransformerBlock(
+                    d_model=d_model,
+                    num_heads=num_heads,
+                    d_ff=d_ff,
+                    max_seq_len=context_length,
+                    theta=theta,
+                    **factory_kwargs,
+                )
+                for _ in range(num_layers)
+            ]
+        )
+
+        self.ln_final = RMSNorm(
+            d_model=d_model,
+            **factory_kwargs,
+        )
+
+        self.lm_head = Linear(
+            in_features=d_model,
+            out_features=vocab_size,
+            **factory_kwargs
+        )
+    
+    def forward(self, in_indices: Tensor) -> Tensor:
+        sequence_length = in_indices.shape[-1]
+        
+        token_positions = torch.arange(
+            sequence_length,
+            device = in_indices.device
+        )
+
+        x = self.token_embeddings(in_indices)
+
+        for layer in self.layers:
+            x = layer(
+                x,
+                token_positions=token_positions
+            )
+        
+        logits = self.lm_head(self.ln_final(x))
+        
+        return logits
+
+
+def cross_entropy(
+    inputs: Tensor,
+    targets: Tensor
+) -> Tensor:
+    maximum = inputs.max(
+        dim=-1,
+        keepdim=True,
+    ).values
+    
+    shifted = inputs - maximum
+
+    log_normalizer = torch.log(
+        torch.exp(shifted).sum(dim=-1)
+    )
+
+    target_logits = torch.gather(
+        shifted,
+        dim=-1,
+        index=targets.unsqueeze(-1),
+    ).squeeze(-1)
+
+    losses = log_normalizer - target_logits
+
+    return losses.mean()
