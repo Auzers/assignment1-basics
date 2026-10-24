@@ -81,6 +81,26 @@ def get_lr_consine_schdule(
         return min_learing_rate + cosine_weight * (max_learning_rate - min_learing_rate)
     
     return min_learing_rate
+
+
+# 涉及到梯度的变换，要用no_grad装饰器
+@torch.no_grad()
+def clip_gradient(
+    parameters,
+    max_l2_norm,
+):
+    grads = [p.grad for p in parameters if p.grad is not None]
+    if not grads:
+        return
+    
+    total_norm = torch.linalg.vector_norm(
+        torch.stack([torch.linalg.vector_norm(grad) for grad in grads])
+    )
+
+    if total_norm > max_l2_norm:
+        scale = max_l2_norm / (total_norm + 1e-6)
+        for grad in grads:
+            grad *= scale
         
 
     
