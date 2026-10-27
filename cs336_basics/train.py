@@ -1,8 +1,9 @@
 """Train the decoder language model on token ID arrays saved with np.save."""
 
 import argparse
+import csv
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np
@@ -38,8 +39,49 @@ class TrainConfig:
     eval_batches: int = 10
     checkpoint_interval: int = 500
     checkpoint_path: Path = Path("checkpoints/tinystories.pt")
+    log_path: Path | None = None
+    wandb_project: str | None = None
+    wandb_run_name: str | None = None
     resume: bool = False
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
+
+
+_CSV_COLUMNS = ["step", "elapsed_s", "train_loss", "val_loss", "lr"]
+
+
+def _prepare_csv_log(path: Path, resume: bool, start_step: int) -> float:
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    if not resume:
+        with path.open("x", newline="", encoding="utf-8") as file:
+            csv.writer(file).writerow(_CSV_COLUMNS)
+        return 0.0
+
+    with path.open("r", newline="", encoding="utf-8") as file:
+        reader = csv.DictReader(file)
+        if reader.fieldnames != _CSV_COLUMNS:
+            raise ValueError(f"Unexpected CSV columns in {path}")
+        last_row = None
+        for row in reader:
+            last_row = row
+
+    if last_row is None:
+        raise ValueError(f"No metrics found in {path}")
+    if int(last_row["step"]) > start_step:
+        raise ValueError("CSV log is ahead of the checkpoint; check which files belong together")
+    return float(last_row["elapsed_s"])
+
+
+def _append_csv_log(
+    path: Path,
+    step: int,
+    elapsed_s: float,
+    train_loss: float,
+    val_loss: float,
+    lr: float,
+) -> None:
+    with path.open("a", newline="", encoding="utf-8") as file:
+        csv.writer(file).writerow([step, f"{elapsed_s:.6f}", train_loss, val_loss, lr])
 
 
 @torch.no_grad()
@@ -85,8 +127,27 @@ def train(train_tokens: np.ndarray, valid_tokens: np.ndarray, config: TrainConfi
         start_step = load_checkpoint(config.checkpoint_path, model, optimizer)
 
     config.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    elapsed_before = (
+        _prepare_csv_log(config.log_path, config.resume, start_step)
+        if config.log_path is not None
+        else 0.0
+    )
     start_time = time.perf_counter()
     cycle_steps = config.cosine_cycle_steps or config.max_steps
+    wandb_run = None
+    if config.wandb_project is not None:
+        import wandb
+
+        wandb_config = {
+            key: str(value) if isinstance(value, Path) else value
+            for key, value in asdict(config).items()
+        }
+        wandb_run = wandb.init(
+            project=config.wandb_project,
+            name=config.wandb_run_name,
+            config=wandb_config,
+            resume="allow" if config.resume else None,
+        )
 
     for step in range(start_step + 1, config.max_steps + 1):
         lr = get_lr_consine_schdule(
@@ -107,18 +168,38 @@ def train(train_tokens: np.ndarray, valid_tokens: np.ndarray, config: TrainConfi
         clip_gradient(model.parameters(), config.max_grad_norm)
         optimizer.step()
 
-        if step % config.eval_interval == 0 or step == config.max_steps:
+        should_evaluate = (
+            step % config.eval_interval == 0
+            or step % config.checkpoint_interval == 0
+            or step == config.max_steps
+        )
+        if should_evaluate:
             valid_loss = _validation_loss(model, valid_tokens, config)
-            elapsed = time.perf_counter() - start_time
+            elapsed = elapsed_before + time.perf_counter() - start_time
+            train_loss = loss.item()
             print(
-                f"step={step} elapsed_s={elapsed:.2f} train_loss={loss.item():.4f} "
+                f"step={step} elapsed_s={elapsed:.2f} train_loss={train_loss:.4f} "
                 f"val_loss={valid_loss:.4f} lr={lr:.6g}",
                 flush=True,
             )
+            if config.log_path is not None:
+                _append_csv_log(config.log_path, step, elapsed, train_loss, valid_loss, lr)
+            if wandb_run is not None:
+                wandb_run.log(
+                    {
+                        "train_loss": train_loss,
+                        "val_loss": valid_loss,
+                        "learning_rate": lr,
+                        "elapsed_s": elapsed,
+                    },
+                    step=step,
+                )
 
         if step % config.checkpoint_interval == 0 or step == config.max_steps:
             save_checkpoint(model, optimizer, step, config.checkpoint_path)
 
+    if wandb_run is not None:
+        wandb_run.finish()
     return config.max_steps
 
 
@@ -128,6 +209,9 @@ def main() -> None:
     parser.add_argument("--train-data", type=Path, default=Path("artifacts/tokenizers/tinystories_train.npy"))
     parser.add_argument("--valid-data", type=Path, default=Path("artifacts/tokenizers/tinystories_valid.npy"))
     parser.add_argument("--checkpoint", type=Path, default=defaults.checkpoint_path)
+    parser.add_argument("--log-path", type=Path, default=Path("logs/tinystories.csv"))
+    parser.add_argument("--wandb-project")
+    parser.add_argument("--wandb-run-name")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--device", default=defaults.device)
     parser.add_argument("--vocab-size", type=int, default=defaults.vocab_size)
@@ -178,6 +262,9 @@ def main() -> None:
         eval_batches=args.eval_batches,
         checkpoint_interval=args.checkpoint_interval,
         checkpoint_path=args.checkpoint,
+        log_path=args.log_path,
+        wandb_project=args.wandb_project,
+        wandb_run_name=args.wandb_run_name,
         resume=args.resume,
         device=args.device,
     )

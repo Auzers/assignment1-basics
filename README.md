@@ -48,3 +48,15 @@ gunzip owt_valid.txt.gz
 cd ..
 ```
 
+## Experiment results
+
+The following plot compares validation loss during the TinyStories learning-rate
+experiments and smoke tests:
+
+![Validation loss for learning-rate experiments](./assets/val_loss.png)
+
+The `3e-3` run achieved the lowest validation loss among the completed standard
+learning-rate runs. The `5e-2` run is substantially less stable and remains at a
+much higher validation loss, illustrating the effect of an overly large learning
+rate.
+
